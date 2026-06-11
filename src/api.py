@@ -10,7 +10,7 @@ import os
 from flask import Flask, request, jsonify, send_from_directory
 from flask_cors import CORS
 
-from auth import (
+from .auth import ( ... ) # El punto le dice "buscá auth en esta misma carpeta src"
     AuthEventBus,
     ConsoleLogger,
     DatabaseObserver,
