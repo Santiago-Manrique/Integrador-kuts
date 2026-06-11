@@ -7,10 +7,13 @@
 """
 
 import os
+import sys
+# Esto le dice a Python que busque módulos adentro de la carpeta 'src'
+sys.path.append(os.path.dirname(os.path.abspath(__file__)))
 from flask import Flask, request, jsonify, send_from_directory
 from flask_cors import CORS
 
-from .auth import ( ... ) # El punto le dice "buscá auth en esta misma carpeta src"
+from auth import ( ... ) # El punto le dice "buscá auth en esta misma carpeta src"
     AuthEventBus,
     ConsoleLogger,
     DatabaseObserver,
