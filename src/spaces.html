@@ -1496,7 +1496,7 @@ async function loadBookingsFromAPI() {
         spaceId: SPACES.find(s => s.name === r.space_name)?.id || '',
         date: r.booking_date,
         slots: r.booking_time === 'Mensual' ? [] : r.booking_time.split(', '),
-        status: r.status === 'activa' ? 'confirmed' : 'pending' 
+        status: r.status === 'activa' ? 'confirmed' : (r.status === 'cancelada' ? 'cancelled' : 'pending') 
       }));
       renderCards(currentFilter); // Recarga visual de las tarjetas
       renderCalendar();           // Recarga visual del calendario

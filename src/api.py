@@ -79,7 +79,6 @@ def login():
     status_code = 200 if result.success else 401
     return jsonify(result.to_dict()), status_code
 @app.get("/api/users")
-
 def get_all_users():
     """Endpoint para que el Dashboard obtenga la lista real de usuarios."""
     users = repository.get_all()
@@ -121,6 +120,27 @@ def get_bookings():
     username = request.args.get("username")
     reservas = booking_repo.get_by_username(username) if username else booking_repo.get_all()
     return jsonify({"success": True, "data": reservas}), 200
+
+@app.patch("/api/bookings/<booking_id>")
+def update_booking_status(booking_id):
+    """Permite al admin confirmar o cancelar una reserva (actualiza status en Supabase)."""
+    data = request.get_json(silent=True) or {}
+    new_status = data.get("status")
+    allowed_statuses = {"activa", "cancelada", "pendiente"}
+    if not new_status or new_status not in allowed_statuses:
+        return jsonify({"success": False, "message": f"Status inválido. Debe ser uno de: {allowed_statuses}"}), 400
+
+    from auth import get_supabase_client
+    client = get_supabase_client()
+    # Supabase devuelve error si no hay filas actualizadas — lo capturamos
+    try:
+        response = client.table("bookings").update({"status": new_status}).eq("id", booking_id).execute()
+        if response.data:
+            return jsonify({"success": True, "data": response.data[0]}), 200
+        return jsonify({"success": False, "message": "Reserva no encontrada."}), 404
+    except Exception as e:
+        return jsonify({"success": False, "message": str(e)}), 500
+
 
 @app.get("/api/spaces")
 def get_spaces():

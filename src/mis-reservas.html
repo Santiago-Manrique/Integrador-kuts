@@ -134,7 +134,36 @@ function getSession(){
   return{valid,role,username};
 }
 function doLogout(){localStorage.removeItem('nexo_token');localStorage.removeItem('nexo_user');window.location.href='login.html';}
-function getAllReservations(){try{return JSON.parse(localStorage.getItem('nexo_reservations')||'[]');}catch{return[];}}
+// CORREGIDO: DB_RESERVAS se carga desde la API, no desde localStorage
+let DB_RESERVAS = [];
+function getAllReservations(){ return DB_RESERVAS; }
+
+async function loadReservasFromAPI() {
+  const { username } = getSession();
+  // Si es admin carga todo, si es usuario normal filtra por su username
+  const url = username
+    ? `http://127.0.0.1:5000/api/bookings?username=${encodeURIComponent(username)}`
+    : 'http://127.0.0.1:5000/api/bookings';
+  try {
+    const resp = await fetch(url);
+    const result = await resp.json();
+    if (result.success) {
+      DB_RESERVAS = result.data.map(r => ({
+        id:         r.id ? String(r.id) : ('R-' + r.created_at),
+        username:   r.username,
+        spaceName:  r.space_name,
+        spaceId:    r.space_name,
+        date:       r.booking_date,
+        slots:      r.booking_time === 'Mensual' ? [] : (r.booking_time || '').split(', ').filter(Boolean),
+        status:     r.status === 'activa' ? 'confirmed' : (r.status || 'pending'),
+        hasConflict: false,
+        createdAt:  r.created_at || new Date().toISOString(),
+      }));
+    }
+  } catch(e) {
+    console.error('Error cargando reservas:', e);
+  }
+}
 
 function fmtDate(iso){
   if(!iso)return'—';
@@ -264,22 +293,36 @@ function closeModal() {
   document.getElementById('cancel-modal').classList.remove('show');
 }
 
-function confirmCancel() {
+async function confirmCancel() {
   if (!_pendingCancelId) return;
-  const res = getAllReservations();
-  const r = res.find(x => x.id === _pendingCancelId);
-  if (r) {
-    r.status = 'cancelled';
-    r.hasConflict = false;
-    localStorage.setItem('nexo_reservations', JSON.stringify(res));
+  // CORREGIDO: cancela en Supabase via PATCH
+  try {
+    const resp = await fetch(`http://127.0.0.1:5000/api/bookings/${encodeURIComponent(_pendingCancelId)}`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ status: 'cancelada' })
+    });
+    const result = await resp.json();
+    if (result.success) {
+      closeModal();
+      await loadReservasFromAPI();  // recarga desde la BD
+      renderPage();
+    } else {
+      alert('Error al cancelar: ' + (result.message || 'intenta de nuevo.'));
+    }
+  } catch(e) {
+    console.error('confirmCancel error:', e);
+    alert('Error de conexión al cancelar la reserva.');
   }
-  closeModal();
-  renderPage(); // re-render con estado actualizado
 }
 
 window.addEventListener('scroll',()=>{document.getElementById('navbar').classList.toggle('scrolled',window.scrollY>30);});
 initNavbar();
-renderPage();
+// CORREGIDO: carga las reservas desde la API antes de renderizar
+(async () => {
+  await loadReservasFromAPI();
+  renderPage();
+})();
 </script>
 <!-- ── CANCEL CONFIRMATION MODAL ── -->
 <div class="modal-bg" id="cancel-modal" onclick="if(event.target===this)closeModal()">

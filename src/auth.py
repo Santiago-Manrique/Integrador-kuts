@@ -8,10 +8,11 @@
 """
 
 from __future__ import annotations
-from abc import abstractmethod
+from abc import ABC, abstractmethod
 
 import bcrypt
 import jwt
+import os
 import re
 import uuid
 import json
@@ -20,16 +21,22 @@ from typing import Any
 
 from supabase import create_client, Client
 
-# ---------- JWT Secret (cambiar en producción) ----------
-JWT_SECRET = "nexo_coworking_super_secret_key_2025"
+# ---------- JWT Secret (usar variable de entorno en producción) ----------
+JWT_SECRET = os.environ.get("JWT_SECRET", "nexo_coworking_super_secret_key_2025")
 JWT_EXPIRATION_HOURS = 2
 
 # ---------- Supabase ----------
-SUPABASE_URL = "https://kyjszgpgyykktbhsqqjg.supabase.co"
-SUPABASE_KEY = "sb_publishable_7XJYNkkzzbg7HZC7bEqv3w_zxFFxd8U"   
+SUPABASE_URL = os.environ.get("SUPABASE_URL", "https://kyjszgpgyykktbhsqqjg.supabase.co")
+SUPABASE_KEY = os.environ.get("SUPABASE_KEY", "sb_publishable_7XJYNkkzzbg7HZC7bEqv3w_zxFFxd8U")
 
-# Inicializamos el cliente UNA sola vez para todo el módulo (Mejora drástica de rendimiento)
-supabase_client: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
+# El cliente se crea de forma lazy para no romper los tests que importan este módulo
+_supabase_client: Client | None = None
+
+def get_supabase_client() -> Client:
+    global _supabase_client
+    if _supabase_client is None:
+        _supabase_client = create_client(SUPABASE_URL, SUPABASE_KEY)
+    return _supabase_client
 
 
 # ═══════════════════════════════════════════════════════════════
@@ -85,7 +92,7 @@ class DatabaseObserver(AuthObserver):
 
     def update(self, event: AuthEvent) -> None:
         try:
-            supabase_client.table("auth_events").insert({
+            get_supabase_client().table("auth_events").insert({
                 "event_type": event.event_type,
                 "payload":    json.dumps(event.payload),
                 "timestamp":  event.timestamp,
@@ -153,7 +160,7 @@ class GuestUser(User):
 # SECCIÓN 3 ─ FACTORY METHOD
 # ═══════════════════════════════════════════════════════════════
 
-class UserFactory:
+class UserFactory(ABC):
     @abstractmethod
     def create_user(self, user_id, username, email, password_hash) -> User:
         ...
@@ -253,7 +260,7 @@ class SupabaseUserRepository(UserRepository):
         return user
 
     def save(self, user: User) -> None:
-        supabase_client.table("users").insert({
+        get_supabase_client().table("users").insert({
             "user_id":         user.user_id,
             "username":        user.username,
             "email":           user.email,
@@ -265,26 +272,26 @@ class SupabaseUserRepository(UserRepository):
         }).execute()
 
     def find_by_username(self, username: str) -> User | None:
-        response = supabase_client.table("users").select("*").eq("username", username).execute()
+        response = get_supabase_client().table("users").select("*").eq("username", username).execute()
         if response.data:
             return self._row_to_user(response.data[0])
         return None
 
     def find_by_email(self, email: str) -> User | None:
-        response = supabase_client.table("users").select("*").eq("email", email).execute()
+        response = get_supabase_client().table("users").select("*").eq("email", email).execute()
         if response.data:
             return self._row_to_user(response.data[0])
         return None
     
     def get_all(self) -> list[User]:
         """Obtiene todos los usuarios registrados en Supabase."""
-        response = supabase_client.table("users").select("*").execute()
+        response = get_supabase_client().table("users").select("*").execute()
         if response.data:
             return [self._row_to_user(row) for row in response.data]
         return []
     
     def update(self, user: User) -> None:
-        supabase_client.table("users").update({
+        get_supabase_client().table("users").update({
             "email":           user.email,
             "password_hash":   user.password_hash,
             "is_active":       int(user.is_active), # ← Acá también
@@ -483,21 +490,21 @@ class BookingRepository:
     
     def get_all(self) -> list[dict]:
         """Obtiene todas las reservas del sistema (para el admin)."""
-        response = supabase_client.table("bookings").select("*").execute()
+        response = get_supabase_client().table("bookings").select("*").execute()
         return response.data if response.data else []
 
     def get_by_username(self, username: str) -> list[dict]:
         """Obtiene solo las reservas de un usuario específico."""
-        response = supabase_client.table("bookings").select("*").eq("username", username).execute()
+        response = get_supabase_client().table("bookings").select("*").eq("username", username).execute()
         return response.data if response.data else []
 
     def create(self, booking_data: dict) -> dict | None:
         """Guarda una nueva reserva en la nube."""
-        response = supabase_client.table("bookings").insert(booking_data).execute()
+        response = get_supabase_client().table("bookings").insert(booking_data).execute()
         return response.data[0] if response.data else None
     
 class SpaceRepository:
     """Repositorio para leer el catálogo de espacios en Supabase."""
     def get_all(self) -> list[dict]:
-        response = supabase_client.table("spaces").select("*").execute()
+        response = get_supabase_client().table("spaces").select("*").execute()
         return response.data if response.data else []

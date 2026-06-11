@@ -391,12 +391,16 @@
 function doLogout(){localStorage.removeItem('nexo_token');localStorage.removeItem('nexo_user');window.location.href='login.html';}
 
 /* ══════════════════════════════════════════════
-   DATA — desde localStorage (reservas reales)
+   DATA — desde la API (Supabase)
 ══════════════════════════════════════════════ */
+// DB_RESERVAS se llena en fetchBookingsAPI() — ya no usamos localStorage
 function getAllReservations() {
-  try { return JSON.parse(localStorage.getItem('nexo_reservations') || '[]'); } catch { return []; }
+  return DB_RESERVAS;
 }
-function saveReservations(r) { localStorage.setItem('nexo_reservations', JSON.stringify(r)); }
+// saveReservations ya no escribe en localStorage; el guardado real lo hace la API
+function saveReservations(_r) {
+  console.log('saveReservations: operación ignorada, el estado se persiste via API.');
+}
 /* ── CONEXIÓN A LA API REAL PARA USUARIOS ── */
 
 const API_BASE = 'http://127.0.0.1:5000/api';
@@ -438,21 +442,26 @@ async function fetchBookingsAPI() {
   try {
     const response = await fetch('http://127.0.0.1:5000/api/bookings');
     const result = await response.json();
-    
+
     if (result.success) {
-      DB_RESERVAS = result.data; // Guardamos los datos puros de la BD
-      
-      // Adaptamos la base de datos al formato visual de la tabla de reservas
-      const reservasFront = DB_RESERVAS.map(r => ({
-        id: r.id || 'N/A', 
-        user: r.username, 
-        space: r.space_name, 
-        date: r.booking_date, 
-        time: r.booking_time, 
-        status: r.status || 'pending'
+      // CORREGIDO: mapeamos al formato completo que usan confirmRes/cancelRes/updateStats
+      DB_RESERVAS = result.data.map(r => ({
+        id:        r.id ? String(r.id) : ('R-' + r.created_at),
+        username:  r.username,
+        nombre:    r.username,
+        email:     '',
+        spaceId:   r.space_name,          // usamos space_name como ID de referencia
+        spaceName: r.space_name,
+        date:      r.booking_date,
+        slots:     r.booking_time === 'Mensual' ? [] : (r.booking_time || '').split(', ').filter(Boolean),
+        total:     '—',
+        status:    r.status === 'activa' ? 'confirmed' : (r.status || 'pending'),
+        hasConflict: false,
+        createdAt: r.created_at || new Date().toISOString(),
       }));
-      
-      renderRes(reservasFront); // Dibujamos la tabla de reservas
+
+      renderRes(DB_RESERVAS);   // dibujamos la tabla con los datos reales
+      updateStats();            // actualizamos contadores usando DB_RESERVAS
     }
   } catch (error) {
     console.error("Error obteniendo las reservas:", error);
@@ -551,12 +560,12 @@ function fmtSlots(slots) {
 ══════════════════════════════════════════════ */
 function updateStats() {
   const res   = getAllReservations();
-  const users = fetchUsersFromAPI();
+  // CORREGIDO: usamos USRS (ya cargado) en vez de llamar fetchUsersFromAPI() sin await
   const pending   = res.filter(r => r.status === 'pending').length;
   const confirmed = res.filter(r => r.status === 'confirmed').length;
 
   document.getElementById('stat-res-active').textContent = confirmed;
-  document.getElementById('stat-users').textContent      = users.filter(u => u.role === 'member').length;
+  document.getElementById('stat-users').textContent      = USRS.filter(u => u.role === 'member').length;
   document.getElementById('stat-pending-n').textContent  = pending;
   const ss = document.getElementById('stat-spaces'); if(ss) ss.textContent = SPACES_INFO.length;
 
@@ -787,25 +796,50 @@ function fSp(q) {
   renderSp(SPACES_INFO.filter(s => s.name.toLowerCase().includes(q.toLowerCase())));
 }
 
-function confirmRes(id) {
-  const res = getAllReservations();
-  const r = res.find(x => x.id === id);
+async function confirmRes(id) {
+  // CORREGIDO: persiste el cambio en Supabase via PATCH
+  const r = DB_RESERVAS.find(x => x.id === id);
   if (!r) return;
-  r.status = 'confirmed';
-  r.hasConflict = false;
-  saveReservations(res);
-  refreshAll();
-  toast(`✓ Reserva de ${r.username} confirmada.`, 'ok');
+  try {
+    const resp = await fetch(`http://127.0.0.1:5000/api/bookings/${encodeURIComponent(id)}`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ status: 'activa' })
+    });
+    const result = await resp.json();
+    if (result.success) {
+      toast(`✓ Reserva de ${r.username} confirmada.`, 'ok');
+      await fetchBookingsAPI();  // recarga desde la BD
+    } else {
+      toast('Error al confirmar: ' + (result.message || ''), 'err');
+    }
+  } catch(e) {
+    console.error('confirmRes error:', e);
+    toast('Error de conexión al confirmar.', 'err');
+  }
 }
 
-function cancelRes(id) {
-  const res = getAllReservations();
-  const r = res.find(x => x.id === id);
+async function cancelRes(id) {
+  // CORREGIDO: persiste el cambio en Supabase via PATCH
+  const r = DB_RESERVAS.find(x => x.id === id);
   if (!r) return;
-  r.status = 'cancelled';
-  saveReservations(res);
-  refreshAll();
-  toast(`Reserva ${id.slice(-6)} cancelada.`, 'ok');
+  try {
+    const resp = await fetch(`http://127.0.0.1:5000/api/bookings/${encodeURIComponent(id)}`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ status: 'cancelada' })
+    });
+    const result = await resp.json();
+    if (result.success) {
+      toast(`Reserva ${id.toString().slice(-6)} cancelada.`, 'ok');
+      await fetchBookingsAPI();  // recarga desde la BD
+    } else {
+      toast('Error al cancelar: ' + (result.message || ''), 'err');
+    }
+  } catch(e) {
+    console.error('cancelRes error:', e);
+    toast('Error de conexión al cancelar.', 'err');
+  }
 }
 
 function toggleUsr(un, act) {
@@ -819,13 +853,11 @@ function toggleUsr(un, act) {
   toast(`Usuario ${un} ${act ? 'activado' : 'bloqueado'}.`, 'ok');
 }
 
-function refreshAll() {
-  fetchUsersFromAPI(); 
-  
-  // Usamos .then() para garantizar el orden: 1° Reservas, 2° Espacios
-  fetchBookingsAPI().then(() => {
-    fetchSpacesAPI(); 
-  });
+async function refreshAll() {
+  // CORREGIDO: recarga todo desde la API en orden correcto
+  await fetchUsersFromAPI();
+  await fetchBookingsAPI();
+  await fetchSpacesAPI();
 }
 
 /* ══════════════════════════════════════════════
@@ -859,19 +891,30 @@ function createManualRes() {
   if (!user || !space || !date) { toast('Completá usuario, espacio y fecha.','err'); return; }
   const sp = SPACES_INFO.find(s => s.id === space);
   const slots = slotsRaw ? slotsRaw.split(',').map(s => s.trim()).filter(Boolean) : [];
-  const newRes = {
-    id: 'R-' + Date.now(),
-    username: user, nombre: user, email: '',
-    spaceId: space, spaceName: sp?.name || space,
-    date, slots, total: sp?.price || '—',
-    status: 'confirmed', createdAt: new Date().toISOString(), hasConflict: false,
-  };
-  const res = getAllReservations();
-  res.push(newRes);
-  saveReservations(res);
-  closeModal();
-  refreshAll();
-  toast('Reserva creada y confirmada exitosamente.', 'ok');
+  // CORREGIDO: persiste en Supabase via POST y actualiza la tabla
+  try {
+    const resp = await fetch('http://127.0.0.1:5000/api/bookings', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        username:     user,
+        space_name:   sp?.name || space,
+        booking_date: date,
+        booking_time: slots.length > 0 ? slots.join(', ') : 'Mensual'
+      })
+    });
+    const result = await resp.json();
+    if (result.success) {
+      closeModal();
+      await fetchBookingsAPI();
+      toast('Reserva creada y confirmada exitosamente.', 'ok');
+    } else {
+      toast('Error al crear reserva: ' + (result.message || ''), 'err');
+    }
+  } catch(e) {
+    console.error('createReservation error:', e);
+    toast('Error de conexión al crear la reserva.', 'err');
+  }
 }
 
 function createManualUser() {
